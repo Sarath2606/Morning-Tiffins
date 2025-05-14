@@ -3,6 +3,15 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { X } from "lucide-react";
+import { auth } from "@/lib/firebase";
+import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult } from "firebase/auth";
+
+// Extend window type for recaptchaVerifier
+declare global {
+  interface Window {
+    recaptchaVerifier?: RecaptchaVerifier;
+  }
+}
 
 // Animated Chef SVG Component
 const AnimatedChef = () => {
@@ -102,25 +111,64 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess })
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [showOtpInput, setShowOtpInput] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!showOtpInput) {
-      setShowOtpInput(true);
-    } else {
-      localStorage.setItem('userPhone', phone);
-      onAuthSuccess();
-      onClose();
-    }
-  };
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (!isOpen) {
       setPhone("");
       setOtp("");
       setShowOtpInput(false);
+      setConfirmationResult(null);
+      setLoading(false);
+      setError(null);
     }
   }, [isOpen]);
+
+  const sendOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier('recaptcha-container', {
+          size: 'invisible',
+          callback: () => {},
+        }, auth);
+      }
+      const appVerifier = window.recaptchaVerifier;
+      const result = await signInWithPhoneNumber(auth, phone, appVerifier);
+      setConfirmationResult(result);
+      setShowOtpInput(true);
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err && 'message' in err) {
+        setError((err as { message: string }).message || 'Failed to send OTP.');
+      } else {
+        setError('Failed to send OTP.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      if (confirmationResult) {
+        await confirmationResult.confirm(otp);
+        localStorage.setItem('userPhone', phone);
+        onAuthSuccess();
+        onClose();
+      }
+    } catch (err: unknown) {
+      setError('Invalid OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -161,7 +209,8 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess })
               <h2 className="text-3xl font-extrabold text-cloud-purple mb-2 text-center">Welcome!</h2>
               <p className="text-lg text-cloud-purple font-semibold mb-4 text-center italic">“Delicious breakfast is waiting for you!”</p>
               <p className="text-gray-600 mb-10 text-center">Sign in with your phone number to continue</p>
-              <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-7">
+              {error && <div className="text-red-600 text-center mb-4">{error}</div>}
+              <form onSubmit={showOtpInput ? verifyOtp : sendOtp} className="w-full max-w-sm space-y-7">
                 <div>
                   <label className="block text-base font-medium text-cloud-purple mb-1">Phone Number</label>
                   <Input
@@ -170,6 +219,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess })
                     value={phone}
                     onChange={e => setPhone(e.target.value)}
                     required
+                    disabled={showOtpInput || loading}
                   />
                 </div>
                 {showOtpInput && (
@@ -181,15 +231,19 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess })
                       value={otp}
                       onChange={e => setOtp(e.target.value)}
                       required
+                      disabled={loading}
                     />
                   </div>
                 )}
                 <Button
                   type="submit"
                   className="w-full bg-cloud-purple hover:bg-cloud-purple/90 text-white font-bold rounded-full py-3 mt-2 text-lg"
+                  disabled={loading}
                 >
-                  {showOtpInput ? "Verify OTP" : "Send OTP"}
+                  {loading ? 'Please wait...' : showOtpInput ? "Verify OTP" : "Send OTP"}
                 </Button>
+                {/* Recaptcha container (invisible) */}
+                <div id="recaptcha-container" />
               </form>
             </div>
           </motion.div>
